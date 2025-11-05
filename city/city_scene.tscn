@@ -1,8 +1,57 @@
-[gd_scene load_steps=2 format=3 uid="uid://ygx8xfkq4e6d"]
+[gd_scene load_steps=4 format=3 uid="uid://ygx8xfkq4e6d"]
 
+[ext_resource type="Script" uid="uid://ct2roi1qoj6db" path="res://city/city_ui.gd" id="1_nloc4"]
 [ext_resource type="Texture2D" uid="uid://bfa7tgha1pqxh" path="res://art/city_icon.svg" id="1_rmkk3"]
 
+[sub_resource type="CircleShape2D" id="CircleShape2D_4fgl2"]
+radius = 22.0
+
 [node name="CityScene" type="Node2D"]
+script = ExtResource("1_nloc4")
 
 [node name="Sprite2D" type="Sprite2D" parent="."]
 texture = ExtResource("1_rmkk3")
+
+[node name="Area2D" type="Area2D" parent="."]
+
+[node name="Collision" type="CollisionShape2D" parent="Area2D"]
+position = Vector2(0, 7)
+shape = SubResource("CircleShape2D_4fgl2")
+
+[node name="Menu" type="Control" parent="."]
+visible = false
+layout_mode = 3
+anchors_preset = 0
+offset_right = 40.0
+offset_bottom = 40.0
+size_flags_horizontal = 6
+size_flags_vertical = 3
+mouse_filter = 2
+mouse_force_pass_scroll_events = false
+
+[node name="Button" type="Button" parent="Menu"]
+layout_mode = 0
+offset_left = 22.0
+offset_top = 22.0
+offset_right = 54.0
+offset_bottom = 53.0
+text = "Me"
+
+[node name="Button2" type="Button" parent="Menu"]
+layout_mode = 0
+offset_left = -16.0
+offset_top = -51.0
+offset_right = 16.0
+offset_bottom = -20.0
+text = "Me"
+
+[node name="Button3" type="Button" parent="Menu"]
+layout_mode = 0
+offset_left = -55.0
+offset_top = 25.0
+offset_right = -23.0
+offset_bottom = 56.0
+text = "Me"
+
+[connection signal="input_event" from="Area2D" to="." method="_on_area_2d_input_event"]
+[connection signal="mouse_entered" from="Area2D" to="." method="_on_area_2d_mouse_entered"]

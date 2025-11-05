@@ -130,6 +130,52 @@ func _generate_roads() -> void:
 				if randf() < road_probability:
 					roads.append([i, j])
 
+func _add_edge_to_set(edge_set: Dictionary, v1: int, v2: int) -> void:
+	# Create a consistent key for the edge (sorted)
+	var key = ""
+	if v1 < v2:
+		key = "%d,%d" % [v1, v2]
+	else:
+		key = "%d,%d" % [v2, v1]
+	
+	# Add the edge if not already present
+	if not key in edge_set:
+		edge_set[key] = [v1, v2]
+
+func _generate_roads_delaunay() -> void:
+	roads.clear()
+	
+	# Need at least 3 cities for triangulation
+	if city_positions.size() < 3:
+		print("Not enough cities for Delaunay triangulation (need at least 3)")
+		return
+	
+	# Create Delaunay instance and add points
+	var delaunay = Delaunay.new()
+	for pos in city_positions:
+		delaunay.add_point(pos)
+	
+	# Perform Delaunay triangulation
+	var triangles = delaunay.triangulate()
+	
+	# Extract unique edges from triangles
+	var edge_set: Dictionary = {}
+	
+	for triangle in triangles:
+		# Each triangle has 3 vertices (indices into city_positions)
+		var v0 = triangle.vertices[0]
+		var v1 = triangle.vertices[1]
+		var v2 = triangle.vertices[2]
+		
+		# Add the 3 edges of the triangle
+		_add_edge_to_set(edge_set, v0, v1)
+		_add_edge_to_set(edge_set, v1, v2)
+		_add_edge_to_set(edge_set, v2, v0)
+	
+	# Convert edge set to roads array
+	for edge_key in edge_set.keys():
+		roads.append(edge_set[edge_key])
+
 func _create_visuals() -> void:
 	# Create roads (draw using Line2D or direct drawing)
 	for road in roads:

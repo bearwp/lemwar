@@ -18,8 +18,4 @@ func _ready() -> void:
 
 func _on_setup_finished():	
 	print("Setup finished")
-	create_visuals()
 	
-	
-func create_visuals():
-	map.create_city_visuals()
