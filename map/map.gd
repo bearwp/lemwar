@@ -15,11 +15,11 @@ var delaunay_adjacency: Dictionary = {}  # Cache of neighbor relationships
 var noise: FastNoiseLite
 
 # New parameters for new features
-var num_rivers := 3
-var river_branch_chance := 0.25
+var num_rivers := 5
+var river_branch_chance := 0.1
 var river_max_length := 15
-var forest_coverage := 0.15
-var forest_clusters := 5
+var forest_coverage := 0.1
+var forest_clusters := 30
 
 # Terrain cache for fast rendering
 var terrain_cache: Image
@@ -28,17 +28,17 @@ var cache_scale := 4  # Cache resolution: map_size / cache_scale
 
 # Simple configuration
 var map_size := Vector2(600, 600)
-var num_points := 150
+var num_points := 250
 var num_cities := 4
-var num_mountains := 2
-var num_water_sources := 4
-var water_expansion_chance := 0.25
-var min_distance := 60.0
+var num_mountains := 6
+var num_water_sources := 12
+var water_expansion_chance := 0.15
+var min_distance := 25.0
 var boundary_padding := 100.0
 var boundary_spacing := 100.0
 var show_voronoi_debug := false
 var allow_coastal_connections := true
-var max_water_connection_distance := 100.0  # New: Maximum range for water connections
+var max_water_connection_distance := 40.0  # New: Maximum range for water connections
 var village_deletion_chance := 0.0  # Random chance to delete villages (0.0-1.0)
 var settlement_connection_deletion_chance := 0.0  # Random chance to delete city/village connections (0.0-1.0)
 
@@ -977,7 +977,7 @@ func _get_terrain_color(pos: Vector2, type: int, properties: Dictionary) -> Colo
 		PointType.WATER:
 			# Check if deep sea
 			if properties.get("is_deep_sea", false):
-				return Color(0.14509805, 0.24313726, 0.47843137).lerp(Color(0.1254902, 0.2, 0.3882353),
+				return Color(0.25490198, 0.34509805, 0.56078434).lerp(Color(0.24705882, 0.29803923, 0.4392157),
 				(noise.get_noise_2d(pos.x * 0.5, pos.y * 0.5) + 1.0) * 0.25)
 			else:
 				return Color(0.3, 0.5, 0.8).lerp(Color(0.20, 0.40, 0.70),
@@ -1009,8 +1009,8 @@ func _draw_connections() -> void:
 
 		if type1 == PointType.WATER or type2 == PointType.WATER:
 			# Draw two-segment dashed line through Voronoi point
-			_draw_dashed_line(p1, voronoi_point, Color(0.35, 0.5, 0.65, 0.6), 2.5, 8.0, 6.0)
-			_draw_dashed_line(voronoi_point, p2, Color(0.35, 0.5, 0.65, 0.6), 2.5, 8.0, 6.0)
+			_draw_dashed_line(p1, voronoi_point, Color(0.5803922, 0.7372549, 0.9019608, 0.6), 2.5, 8.0, 6.0)
+			_draw_dashed_line(voronoi_point, p2, Color(0.65882355, 0.80784315, 0.9529412, 0.6), 2.5, 8.0, 6.0)
 		elif type1 == PointType.CITY and type2 == PointType.CITY:
 			# Highway through Voronoi point
 			draw_line(p1, voronoi_point, Color(0.4, 0.25, 0.15, 0.7), 5.5)
