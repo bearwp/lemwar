@@ -977,7 +977,7 @@ func _get_terrain_color(pos: Vector2, type: int, properties: Dictionary) -> Colo
 		PointType.WATER:
 			# Check if deep sea
 			if properties.get("is_deep_sea", false):
-				return Color(0.05, 0.15, 0.4).lerp(Color(0.02, 0.10, 0.30),
+				return Color(0.14509805, 0.24313726, 0.47843137).lerp(Color(0.1254902, 0.2, 0.3882353),
 				(noise.get_noise_2d(pos.x * 0.5, pos.y * 0.5) + 1.0) * 0.25)
 			else:
 				return Color(0.3, 0.5, 0.8).lerp(Color(0.20, 0.40, 0.70),
