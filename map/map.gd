@@ -1,48 +1,78 @@
-
 extends Node2D
 class_name GameMap
 
-enum PointType { CITY, VILLAGE, WATER }
+enum PointType { CITY, VILLAGE, WATER, MOUNTAIN }
 
 var map_points: Array[Vector2] = []
 var point_types: Array[int] = []
 var map_connections: Array[Array] = []
-var highway_connections: Array[Array] = []
 var noise: FastNoiseLite
-var elevation_noise: FastNoiseLite
+var boundary_noise: FastNoiseLite
 
 var city_scene: PackedScene = preload("res://city/city_scene.tscn")
 
-const MAP_SIZE = Vector2(1024, 600)
+# Configurable parameters
+var map_size := Vector2(1024, 600)
+var num_points := 60
+var num_cities := 10
+var num_mountains := 3 # New: Number of mountain points to generate
+var min_distance := 50.0
+var interior_water_chance := 0.15  # Chance for interior points to start as water
+var water_spread_chance := 0.4     # Chance for water to spread to neighbors
+var road_connection_chance := 1.0 # Chance to keep a road connection
+# New: Max distance for a village to connect to water
+var max_village_water_connection_distance := 1500.0 
+
+var show_voronoi_borders: bool = false # New: Toggle for displaying Voronoi borders
+
+const MAP_SIZE = Vector2(1024, 600)  # Keep for compatibility
 
 func _ready() -> void:
-	var num_points = 60
-	var num_cities = 10
-	var num_water = randi_range(10, 30)
-	var min_distance = 50.0
-
-	_setup_terrain_noise()
-	map_points = _generate_poisson_points(min_distance, num_points)
-	_assign_point_types_clustered(num_cities, num_water)
-	_remove_isolated_water()
-	_build_road_network()
-	_ensure_connectivity()
-
+	_setup_noise()
+	_generate_map()
 	queue_redraw()
+	
+	# New: Add a button to toggle Voronoi borders
+	var toggle_button = Button.new()
+	add_child(toggle_button)
+	toggle_button.text = "Toggle Voronoi Borders"
+	# Changed position to be clearly visible at the top-left
+	toggle_button.position = Vector2(20, 20)
+	toggle_button.pressed.connect(_on_toggle_voronoi_borders_pressed)
 
-func _setup_terrain_noise() -> void:
+func _setup_noise() -> void:
+	# Noise for terrain variation within cells
 	noise = FastNoiseLite.new()
 	noise.seed = randi()
 	noise.noise_type = FastNoiseLite.TYPE_PERLIN
-	noise.frequency = 0.02
-	noise.fractal_octaves = 2
+	noise.frequency = 0.01
+	noise.fractal_octaves = 3
 
-	# Separate noise for elevation
-	elevation_noise = FastNoiseLite.new()
-	elevation_noise.seed = randi()
-	elevation_noise.noise_type = FastNoiseLite.TYPE_PERLIN
-	elevation_noise.frequency = 0.005  # Larger features
-	elevation_noise.fractal_octaves = 3
+	# Noise for breaking up Voronoi boundaries
+	boundary_noise = FastNoiseLite.new()
+	boundary_noise.seed = randi()
+	boundary_noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	boundary_noise.frequency = .01
+	boundary_noise.fractal_octaves = 2
+
+func _on_toggle_voronoi_borders_pressed() -> void:
+	show_voronoi_borders = not show_voronoi_borders
+	# Add a print statement to confirm the button press
+	print("Toggle Voronoi Borders pressed. show_voronoi_borders is now: ", show_voronoi_borders)
+	queue_redraw()
+
+func _generate_map() -> void:
+	# Generate scattered points
+	map_points = _generate_poisson_points(min_distance, num_points)
+
+	# Assign types: water on borders, random interior water, cities, villages
+	_assign_point_types()
+
+	# Build road network with Delaunay triangulation
+	_build_road_network()
+
+	# Ensure all non-water settlements are connected
+	_ensure_connectivity()
 
 func _generate_poisson_points(min_dist: float, max_points: int) -> Array[Vector2]:
 	var points: Array[Vector2] = []
@@ -53,8 +83,8 @@ func _generate_poisson_points(min_dist: float, max_points: int) -> Array[Vector2
 		attempts += 1
 
 		var new_point = Vector2(
-							randf() * MAP_SIZE.x,
-							randf() * MAP_SIZE.y
+							randf() * map_size.x,
+							randf() * map_size.y
 						)
 
 		var valid = true
@@ -68,96 +98,114 @@ func _generate_poisson_points(min_dist: float, max_points: int) -> Array[Vector2
 
 	return points
 
-func _assign_point_types_clustered(num_cities: int, num_water: int) -> void:
+func _assign_point_types() -> void:
 	point_types.resize(map_points.size())
 
+	# First pass: all points start as villages
 	for i in range(map_points.size()):
 		point_types[i] = PointType.VILLAGE
 
-	var available_indices = range(map_points.size())
-	available_indices.shuffle()
-
-	for i in range(min(num_cities, available_indices.size())):
-		point_types[available_indices[i]] = PointType.CITY
-
-	var water_assigned = 0
-	var cluster_distance = 120.0
-	var new_cluster_chance = 0.1
-	var current_cluster_size = 0
-	var max_cluster_size = randi_range(2, 4)
-
-	while water_assigned < num_water and available_indices.size() > num_cities:
-		var start_new_cluster = (water_assigned == 0 or
-		current_cluster_size >= max_cluster_size or
-		randf() < new_cluster_chance)
-
-		if start_new_cluster:
-			var found = false
-			for i in range(map_points.size()):
-				if point_types[i] == PointType.VILLAGE:
-					point_types[i] = PointType.WATER
-					water_assigned += 1
-					current_cluster_size = 1
-					max_cluster_size = randi_range(2, 4)
-					found = true
-					break
-
-			if not found:
-				break
-		else:
-			var existing_water = []
-			for i in range(map_points.size()):
-				if point_types[i] == PointType.WATER:
-					existing_water.append(i)
-
-			if existing_water.size() > 0:
-				var recent_waters = existing_water.slice(max(0, existing_water.size() - max_cluster_size))
-				var target_water_idx = recent_waters[randi() % recent_waters.size()]
-				var target_pos = map_points[target_water_idx]
-
-				var best_idx = -1
-				var best_dist = INF
-
-				for i in range(map_points.size()):
-					if point_types[i] == PointType.VILLAGE:
-						var dist = map_points[i].distance_to(target_pos)
-						if dist < cluster_distance and dist < best_dist:
-							best_dist = dist
-							best_idx = i
-
-				if best_idx != -1:
-					point_types[best_idx] = PointType.WATER
-					water_assigned += 1
-					current_cluster_size += 1
-				else:
-					current_cluster_size = max_cluster_size
-
-func _remove_isolated_water() -> void:
+	# Second pass: force border points to be water (ocean)
+	var border_threshold = 60.0  # Distance from edge to be considered border
 	for i in range(map_points.size()):
-		if point_types[i] != PointType.WATER:
-			continue
+		var pos = map_points[i]
+		if pos.x < border_threshold or pos.x > map_size.x - border_threshold or \
+		pos.y < border_threshold or pos.y > map_size.y - border_threshold:
+			point_types[i] = PointType.WATER
 
-		var has_water_neighbor = false
-		var my_pos = map_points[i]
+	# Third pass: create interior water clusters (lakes/rivers)
+	_create_interior_water()
 
-		for j in range(map_points.size()):
-			if i == j or point_types[j] != PointType.WATER:
+	# Fourth pass: assign mountains to remaining non-water points
+	var available_for_mountains_or_cities = []
+	for i in range(map_points.size()):
+		if point_types[i] == PointType.VILLAGE: # Only assign mountains to current villages
+			available_for_mountains_or_cities.append(i)
+	
+	available_for_mountains_or_cities.shuffle()
+	var mountains_assigned = 0
+	var temp_available_for_cities = [] # Points remaining after mountains
+	for idx in available_for_mountains_or_cities:
+		if mountains_assigned < num_mountains:
+			point_types[idx] = PointType.MOUNTAIN
+			mountains_assigned += 1
+		else:
+			temp_available_for_cities.append(idx) # These are still villages, eligible for cities
+
+	# Fifth pass: assign cities to remaining non-water, non-mountain points
+	temp_available_for_cities.shuffle()
+	for i in range(min(num_cities, temp_available_for_cities.size())):
+		point_types[temp_available_for_cities[i]] = PointType.CITY
+
+func _create_interior_water() -> void:
+	# Find non-border points that can become water
+	var interior_points = []
+	var border_threshold = 60.0
+
+	for i in range(map_points.size()):
+		if point_types[i] != PointType.WATER:  # Not already ocean
+			var pos = map_points[i]
+			# Check if truly interior
+			if pos.x > border_threshold and pos.x < map_size.x - border_threshold and \
+			pos.y > border_threshold and pos.y < map_size.y - border_threshold:
+				interior_points.append(i)
+
+	# Randomly select starting points for water clusters
+	interior_points.shuffle()
+	var water_seeds = []
+	for idx in interior_points:
+		if randf() < interior_water_chance:
+			water_seeds.append(idx)
+
+	# Spread water from seeds to create clusters
+	for seed_idx in water_seeds:
+		if point_types[seed_idx] == PointType.VILLAGE:  # May have been converted already
+			_spread_water_from(seed_idx, interior_points)
+
+func _spread_water_from(start_idx: int, valid_indices: Array) -> void:
+	point_types[start_idx] = PointType.WATER
+
+	var to_process = [start_idx]
+	var processed = {}
+	processed[start_idx] = true
+
+	while to_process.size() > 0:
+		var current_idx = to_process.pop_front()
+
+		# Find nearby points
+		var neighbors = _find_neighbors(current_idx, valid_indices)
+
+		for neighbor_idx in neighbors:
+			if processed.has(neighbor_idx):
 				continue
 
-			var dist = my_pos.distance_to(map_points[j])
-			if dist < 150.0:
-				has_water_neighbor = true
-				break
+			processed[neighbor_idx] = true
 
-		if not has_water_neighbor:
-			point_types[i] = PointType.VILLAGE
+			# Chance to spread water to this neighbor
+			if point_types[neighbor_idx] == PointType.VILLAGE and randf() < water_spread_chance:
+				point_types[neighbor_idx] = PointType.WATER
+				to_process.append(neighbor_idx)
+
+func _find_neighbors(idx: int, valid_indices: Array, max_distance: float = 120.0) -> Array:
+	var neighbors = []
+	var pos = map_points[idx]
+
+	for other_idx in valid_indices:
+		if other_idx == idx:
+			continue
+
+		var dist = pos.distance_to(map_points[other_idx])
+		if dist < max_distance:
+			neighbors.append(other_idx)
+
+	return neighbors
 
 func _build_road_network() -> void:
 	if map_points.size() < 3:
 		return
 
 	var delaunay = Delaunay.new()
-	delaunay.set_rectangle(Rect2(Vector2.ZERO, MAP_SIZE))
+	delaunay.set_rectangle(Rect2(Vector2.ZERO, map_size))
 
 	for point in map_points:
 		delaunay.add_point(point)
@@ -174,72 +222,72 @@ func _build_road_network() -> void:
 		if idx_a == -1 or idx_b == -1 or idx_c == -1:
 			continue
 
-		if _is_angle_good(triangle.a, triangle.b, triangle.c):
-			_add_edge(edges_dict, idx_a, idx_b)
-		if _is_angle_good(triangle.b, triangle.c, triangle.a):
-			_add_edge(edges_dict, idx_b, idx_c)
-		if _is_angle_good(triangle.c, triangle.a, triangle.b):
-			_add_edge(edges_dict, idx_c, idx_a)
+		_add_edge(edges_dict, idx_a, idx_b)
+		_add_edge(edges_dict, idx_b, idx_c)
+		_add_edge(edges_dict, idx_c, idx_a)
 
-	# Apply Gabriel Graph filter
-	var gabriel_edges = _filter_gabriel_graph(edges_dict.values())
+	# Clear existing connections to rebuild based on new rules
+	map_connections.clear()
 
-	for edge in gabriel_edges:
-		var p1 = map_points[edge[0]]
-		var p2 = map_points[edge[1]]
-		var distance = p1.distance_to(p2)
+	# Filter edges and categorize them
+	for edge in edges_dict.values():
+		var idx1 = edge[0]
+		var idx2 = edge[1]
+		var type1 = point_types[idx1]
+		var type2 = point_types[idx2]
 
-		if distance > 140:  # Slightly reduced
+		# Rule: Mountains should connect to nothing
+		if type1 == PointType.MOUNTAIN or type2 == PointType.MOUNTAIN:
 			continue
 
-		var type1 = point_types[edge[0]]
-		var type2 = point_types[edge[1]]
-
-		var is_highway = (type1 == PointType.CITY and type2 == PointType.CITY)
-
-		if is_highway:
-			highway_connections.append(edge)
-		else:
+		# Rule: Nearby water points should always connect
+		if type1 == PointType.WATER and type2 == PointType.WATER:
 			map_connections.append(edge)
+			continue # Move to the next edge
 
-func _filter_gabriel_graph(edges: Array) -> Array:
-	# Gabriel Graph: Keep edge only if circle with edge as diameter contains no other points
-	var gabriel_edges = []
+		# Rule: Villages and cities should only connect to water when within a radius
+		# This applies to connections between (CITY/VILLAGE) and WATER
+		if (type1 == PointType.WATER and (type2 == PointType.CITY or type2 == PointType.VILLAGE)) or \
+		   (type2 == PointType.WATER and (type1 == PointType.CITY or type1 == PointType.VILLAGE)):
+			var dist = map_points[idx1].distance_to(map_points[idx2])
+			if dist <= max_village_water_connection_distance:
+				# Apply road_connection_chance for these "bridges"
+				if randf() < road_connection_chance:
+					map_connections.append(edge)
+			continue # Move to the next edge
 
-	for edge in edges:
-		var p1 = map_points[edge[0]]
-		var p2 = map_points[edge[1]]
-		var center = (p1 + p2) * 0.5
-		var radius = p1.distance_to(p2) * 0.5
-
-		var is_gabriel = true
-		for i in range(map_points.size()):
-			if i == edge[0] or i == edge[1]:
-				continue
-
-			var dist = map_points[i].distance_to(center)
-			if dist < radius - 0.1:  # Small epsilon for floating point
-				is_gabriel = false
-				break
-
-		if is_gabriel:
-			gabriel_edges.append(edge)
-
-	return gabriel_edges
+		# Rule: Nearby cities and villages should connect (with road_connection_chance)
+		# This applies to connections between (CITY/VILLAGE) and (CITY/VILLAGE)
+		if (type1 == PointType.CITY or type1 == PointType.VILLAGE) and \
+		   (type2 == PointType.CITY or type2 == PointType.VILLAGE):
+			# Apply road_connection_chance for these "roads"
+			if randf() < road_connection_chance:
+				map_connections.append(edge)
+			continue # Move to the next edge
 
 func _ensure_connectivity() -> void:
+	# Find all non-water and non-mountain points
+	var non_water_and_non_mountain_indices = []
+	for i in range(map_points.size()):
+		if point_types[i] != PointType.WATER and point_types[i] != PointType.MOUNTAIN:
+			non_water_and_non_mountain_indices.append(i)
+
+	if non_water_and_non_mountain_indices.size() < 2:
+		return
+
 	var visited = []
 	visited.resize(map_points.size())
 	visited.fill(false)
 
 	var components = []
 
-	for i in range(map_points.size()):
+	for i in non_water_and_non_mountain_indices:
 		if not visited[i]:
 			var component = []
 			_dfs(i, visited, component)
 			components.append(component)
 
+	# Connect components
 	if components.size() > 1:
 		for i in range(components.size() - 1):
 			var comp_a = components[i]
@@ -250,6 +298,9 @@ func _ensure_connectivity() -> void:
 
 			for a_idx in comp_a:
 				for b_idx in comp_b:
+					# New: Ensure we don't try to connect to a mountain point
+					if point_types[a_idx] == PointType.MOUNTAIN or point_types[b_idx] == PointType.MOUNTAIN:
+						continue
 					var dist = map_points[a_idx].distance_to(map_points[b_idx])
 					if dist < min_dist:
 						min_dist = dist
@@ -268,186 +319,159 @@ func _dfs(node: int, visited: Array, component: Array) -> void:
 		elif edge[1] == node and not visited[edge[0]]:
 			_dfs(edge[0], visited, component)
 
-	for edge in highway_connections:
-		if edge[0] == node and not visited[edge[1]]:
-			_dfs(edge[1], visited, component)
-		elif edge[1] == node and not visited[edge[0]]:
-			_dfs(edge[0], visited, component)
-
-func _is_angle_good(corner: Vector2, side1: Vector2, side2: Vector2) -> bool:
-	var v1 = (side1 - corner).normalized()
-	var v2 = (side2 - corner).normalized()
-	var dot = v1.dot(v2)
-	var angle = acos(clamp(dot, -1.0, 1.0))
-	return angle > 0.4  # Slightly stricter
-
 func _add_edge(dict: Dictionary, i1: int, i2: int) -> void:
 	var key = str(min(i1, i2)) + "_" + str(max(i1, i2))
 	if not dict.has(key):
 		dict[key] = [i1, i2]
 
-func _connection_has_water(edge: Array) -> bool:
-	return point_types[edge[0]] == PointType.WATER or point_types[edge[1]] == PointType.WATER
-
-func _both_are_water(edge: Array) -> bool:
-	return point_types[edge[0]] == PointType.WATER and point_types[edge[1]] == PointType.WATER
-
-func _get_water_influence(pos: Vector2) -> float:
-	# Smooth distance field to nearest water
-	var min_dist = INF
-	for i in range(map_points.size()):
-		if point_types[i] == PointType.WATER:
-			var dist = pos.distance_to(map_points[i])
-			if dist < min_dist:
-				min_dist = dist
-
-	# Check water paths too
-	for connection in map_connections:
-		if _both_are_water(connection):
-			var p1 = map_points[connection[0]]
-			var p2 = map_points[connection[1]]
-			var dist_to_line = _distance_to_line_segment(pos, p1, p2)
-			if dist_to_line < min_dist:
-				min_dist = dist_to_line
-
-	for connection in highway_connections:
-		if _both_are_water(connection):
-			var p1 = map_points[connection[0]]
-			var p2 = map_points[connection[1]]
-			var dist_to_line = _distance_to_line_segment(pos, p1, p2)
-			if dist_to_line < min_dist:
-				min_dist = dist_to_line
-
-	# Convert to 0-1 influence (smooth falloff)
-	var water_radius = 80.0
-	return 1.0 - clamp(min_dist / water_radius, 0.0, 1.0)
-
-func _distance_to_line_segment(point: Vector2, line_start: Vector2, line_end: Vector2) -> float:
-	var line_vec = line_end - line_start
-	var point_vec = point - line_start
-	var line_len = line_vec.length()
-
-	if line_len == 0:
-		return point.distance_to(line_start)
-
-	var t = clamp(point_vec.dot(line_vec) / (line_len * line_len), 0.0, 1.0)
-	var projection = line_start + t * line_vec
-	return point.distance_to(projection)
-
 func _draw() -> void:
-	_draw_terrain()
+	_draw_voronoi_terrain()
+	_draw_roads()
+	_draw_points()
 
-	# Draw local roads
-	for connection in map_connections:
-		var p1 = map_points[connection[0]]
-		var p2 = map_points[connection[1]]
-		var distance = p1.distance_to(p2)
-		var has_water = _connection_has_water(connection)
+func _draw_voronoi_terrain() -> void:
+	var cell_size = 8  # Smaller cells for better resolution
 
-		if has_water:
-			_draw_dashed_line(p1, p2, Color(0.3, 0.45, 0.6), 3.0, 12.0, 8.0)
-		else:
-			var width = 3.5 if distance < 70 else 2.5
-			draw_line(p1, p2, Color(0.35, 0.3, 0.25), width + 1.5, true)
-			draw_line(p1, p2, Color(0.75, 0.7, 0.65), width, true)
-
-	# Draw highways
-	for connection in highway_connections:
-		var p1 = map_points[connection[0]]
-		var p2 = map_points[connection[1]]
-		var has_water = _connection_has_water(connection)
-
-		if has_water:
-			_draw_dashed_line(p1, p2, Color(0.4, 0.55, 0.7), 4.5, 15.0, 10.0)
-		else:
-			draw_line(p1, p2, Color(0.5, 0.25, 0.2), 5.5, true)
-			draw_line(p1, p2, Color(0.85, 0.6, 0.4), 4.0, true)
-
-	# Draw all points
-	for i in range(map_points.size()):
-		var pos = map_points[i]
-
-		match point_types[i]:
-			PointType.CITY:
-				draw_circle(pos, 11, Color(0.25, 0.2, 0.2))
-				draw_circle(pos, 9, Color(0.8, 0.35, 0.3))
-				draw_circle(pos, 6, Color(0.95, 0.55, 0.45))
-			PointType.VILLAGE:
-				draw_circle(pos, 5, Color(0.4, 0.35, 0.3))
-				draw_circle(pos, 3, Color(0.65, 0.6, 0.55))
-			PointType.WATER:
-				draw_circle(pos, 8, Color(0.15, 0.28, 0.45))
-				draw_circle(pos, 6, Color(0.25, 0.42, 0.62))
-				draw_circle(pos, 3, Color(0.45, 0.60, 0.78))
-
-func _draw_terrain() -> void:
-	var cell_size = 16
-
-	for x in range(0, int(MAP_SIZE.x), cell_size):
-		for y in range(0, int(MAP_SIZE.y), cell_size):
+	for x in range(0, int(map_size.x), cell_size):
+		for y in range(0, int(map_size.y), cell_size):
 			var pos = Vector2(x, y)
 
-			# Get water influence (0 = land, 1 = deep water)
-			var water_influence = _get_water_influence(pos)
+			# Find nearest point (Voronoi cell)
+			var nearest_idx = _find_nearest_point(pos)
+			var nearest_type = point_types[nearest_idx]
 
-			# Get elevation
-			var elevation = elevation_noise.get_noise_2d(pos.x, pos.y)
+			# Find second nearest for boundary detection
+			var distances = []
+			for i in range(map_points.size()):
+				distances.append([i, pos.distance_to(map_points[i])])
+			distances.sort_custom(func(a, b): return a[1] < b[1])
 
-			var color: Color
-			if water_influence > 0.3:  # In water
-				# Deep to shallow water based on influence
-				var deep_water = Color(0.18, 0.30, 0.48)
-				var shallow_water = Color(0.28, 0.45, 0.62)
-				color = deep_water.lerp(shallow_water, 1.0 - water_influence)
-			else:
-				# Land with elevation-based coloring
-				var base_land = Color(0.36078432, 0.40784314, 0.24705882)  # Light tan
-				var low_land = Color(0.48235294, 0.6666667, 0.09411765)   # Greenish lowlands
-				var high_land = Color(0.70, 0.68, 0.60)  # Brown highlands
+			var nearest_dist = distances[0][1]
+			var second_nearest_dist = distances[1][1] if distances.size() > 1 else nearest_dist + 100
+			var second_nearest_idx = distances[1][0] if distances.size() > 1 else nearest_idx
+			var second_nearest_type = point_types[second_nearest_idx]
 
-				if elevation < -0.2:
-					# Lowlands (valleys, plains)
-					color = base_land.lerp(low_land, 0.5)
-				elif elevation > 0.3:
-					# Highlands (hills, mountains)
-					color = base_land.lerp(high_land, 0.6)
-				else:
-					# Regular land
-					color = base_land
+			# Calculate how close we are to the boundary
+			var boundary_distance = second_nearest_dist - nearest_dist
+			var is_near_boundary = boundary_distance < 15.0
 
-				# Add subtle texture variation
-				var detail = noise.get_noise_2d(pos.x, pos.y) * 0.08
-				color = color.lerp(Color(0.82, 0.79, 0.72), detail)
+			# Add noise to break up boundaries
+			var boundary_breakup = boundary_noise.get_noise_2d(pos.x, pos.y)
+			if is_near_boundary and boundary_breakup > 0.3:
+				# Switch to second nearest sometimes for irregular borders
+				nearest_type = second_nearest_type
 
-				# Blend to water at edges
-				if water_influence > 0:
-					var shore_color = Color(0.65, 0.70, 0.60)  # Sandy shore
-					color = color.lerp(shore_color, water_influence * 3.0)
+			# Get base color for this cell
+			var color = _get_terrain_color(pos, nearest_type)
+
+			# Add per-cell variation with noise
+			var variation = noise.get_noise_2d(pos.x, pos.y) * 0.15
+			color = color.lerp(Color.WHITE, variation * 0.5)
+			color = color.lerp(Color.BLACK, -variation * 0.5)
+
+			# Blend at boundaries
+			if is_near_boundary:
+				var other_color = _get_terrain_color(pos, second_nearest_type)
+				var blend_factor = clamp(boundary_distance / 15.0, 0.0, 1.0)
+				color = color.lerp(other_color, 1.0 - blend_factor)
 
 			draw_rect(Rect2(pos, Vector2(cell_size, cell_size)), color)
+			
+			# New: Draw Voronoi border if toggled and near boundary
+			if show_voronoi_borders and is_near_boundary:
+				# Changed color to RED and line width to 2.0 for better visibility
+				draw_rect(Rect2(pos, Vector2(cell_size, cell_size)), Color.RED, false, 2.0)
 
-	# Draw coastlines (darker water edges)
-	for x in range(0, int(MAP_SIZE.x), cell_size):
-		for y in range(0, int(MAP_SIZE.y), cell_size):
-			var pos = Vector2(x, y)
-			var water_influence = _get_water_influence(pos)
 
-			if water_influence > 0.5:
-				# Check if near land
-				var near_land = false
-				for dx in [-cell_size, cell_size]:
-					for dy in [-cell_size, cell_size]:
-						var check_pos = pos + Vector2(dx, dy)
-						var check_influence = _get_water_influence(check_pos)
-						if check_influence < 0.5:
-							near_land = true
-							break
-					if near_land:
-						break
+# Instead of just a midpoint, sample multiple points along the connection
+func _get_voronoi_edge_path(p1: Vector2, p2: Vector2, num_samples: int = 3) -> PackedVector2Array:
+	var path = PackedVector2Array()
+	path.append(p1)
+	
+	for i in range(1, num_samples):
+		var t = float(i) / float(num_samples)
+		var point = p1.lerp(p2, t)
+		path.append(point)
+	
+	path.append(p2)
+	return path
 
-				if near_land:
-					draw_rect(Rect2(pos, Vector2(cell_size, cell_size)), Color(0.14, 0.24, 0.38, 0.6))
+func _find_nearest_point(pos: Vector2) -> int:
+	var nearest_idx = 0
+	var min_dist = INF
 
+	for i in range(map_points.size()):
+		var dist = pos.distance_to(map_points[i])
+		if dist < min_dist:
+			min_dist = dist
+			nearest_idx = i
+
+	return nearest_idx
+
+func _get_terrain_color(pos: Vector2, type: int) -> Color:
+	match type:
+		PointType.WATER:
+			# Blue water with depth variation
+			var base_water = Color(0.25, 0.42, 0.62)
+			var deep_water = Color(0.15, 0.28, 0.45)
+			var noise_val = noise.get_noise_2d(pos.x * 0.5, pos.y * 0.5)
+			return base_water.lerp(deep_water, (noise_val + 1.0) * 0.25)
+
+		PointType.CITY, PointType.VILLAGE:
+			# Green land with variation
+			var base_green = Color(0.48, 0.67, 0.29)
+			var dark_green = Color(0.36, 0.51, 0.25)
+			var light_green = Color(0.58, 0.75, 0.35)
+
+			var noise_val = noise.get_noise_2d(pos.x, pos.y)
+			if noise_val > 0.3:
+				return base_green.lerp(light_green, noise_val * 0.4)
+			else:
+				return base_green.lerp(dark_green, -noise_val * 0.3)
+
+		PointType.MOUNTAIN:
+			# Grey/brown rocky texture for mountains
+			var base_mountain = Color(0.45, 0.4, 0.35)
+			var snowy_peak = Color(0.85, 0.9, 0.95)
+			var dark_rock = Color(0.3, 0.25, 0.2)
+
+			var noise_val = noise.get_noise_2d(pos.x * 0.5, pos.y * 0.5)
+			if noise_val > 0.4: # Higher noise values for "snowy" peaks
+				return base_mountain.lerp(snowy_peak, (noise_val - 0.4) * 1.5)
+			elif noise_val < -0.3: # Lower noise values for darker crevices
+				return base_mountain.lerp(dark_rock, (-noise_val - 0.3) * 1.5)
+			else:
+				return base_mountain
+
+	return Color.WHITE  # Fallback
+
+func _draw_roads() -> void:
+	# Draw roads between settlements
+	for connection in map_connections:
+		var p1 = map_points[connection[0]]
+		var p2 = map_points[connection[1]]
+		var type1 = point_types[connection[0]]
+		var type2 = point_types[connection[1]]
+		
+		# Calculate midpoint of Voronoi edge
+		var edge_midpoint = (p1 + p2) * 0.5
+		
+		# Water-to-water connections (dotted lines)
+		if type1 == PointType.WATER or type2 == PointType.WATER:
+			_draw_dashed_line(p1, edge_midpoint, Color(0.35, 0.5, 0.65, 0.6), 2.5, 8.0, 6.0)
+			_draw_dashed_line(edge_midpoint, p2, Color(0.35, 0.5, 0.65, 0.6), 2.5, 8.0, 6.0)
+		# Land connections (roads) or mixed connections (bridges)
+		else:
+			# Determine road style
+			var is_highway = (type1 == PointType.CITY and type2 == PointType.CITY)
+			if is_highway:
+				# Highway: thicker, orange/brown
+				draw_line(p1, edge_midpoint, Color(0.4, 0.25, 0.15, 0.5), 5.5, false)
+				draw_line(edge_midpoint, p2, Color(0.4, 0.25, 0.15, 0.5), 5.5, false)
+			else:
+				# Regular road: thinner, light brown
+				draw_line(p1, edge_midpoint, Color(0.6313726, 0.38431373, 0.15294118, 0.5019608), 3.5, false)
+				draw_line(edge_midpoint, p2, Color(0.6313726, 0.38431373, 0.15294118, 0.5019608), 3.5, false)
 func _draw_dashed_line(from: Vector2, to: Vector2, color: Color, width: float, dash_length: float, gap_length: float) -> void:
 	var direction = (to - from).normalized()
 	var distance = from.distance_to(to)
@@ -460,3 +484,67 @@ func _draw_dashed_line(from: Vector2, to: Vector2, color: Color, width: float, d
 
 		draw_line(start, end, color, width, true)
 		current_distance += dash_length + gap_length
+
+func _draw_points() -> void:
+	# Draw settlement markers
+	for i in range(map_points.size()):
+		var pos = map_points[i]
+		var type = point_types[i]
+		
+		match type:
+			PointType.CITY:
+				draw_circle(pos, 11, Color(0.25, 0.2, 0.2))
+				draw_circle(pos, 9, Color(0.8, 0.35, 0.3))
+				draw_circle(pos, 6, Color(0.95, 0.55, 0.45))
+			
+			PointType.VILLAGE:
+				draw_circle(pos, 5, Color(0.4, 0.35, 0.3))
+				draw_circle(pos, 3, Color(0.65, 0.6, 0.55))
+			
+			PointType.WATER:
+				# Draw water points with distinct visual
+				draw_circle(pos, 7, Color(0.15, 0.28, 0.45))
+				draw_circle(pos, 5, Color(0.25, 0.42, 0.62))
+				draw_circle(pos, 3, Color(0.45, 0.60, 0.78))
+			
+			PointType.MOUNTAIN:
+				# Draw a triangular-like shape for mountains
+				var p1 = pos + Vector2(0, -9)
+				var p2 = pos + Vector2(-8, 5)
+				var p3 = pos + Vector2(8, 5)
+				var color_base = Color(0.4, 0.35, 0.3)
+				var color_highlight = Color(0.6, 0.55, 0.5)
+				
+				# Darker base
+				draw_colored_polygon(PackedVector2Array([p1, p2, p3]), color_base)
+				# Lighter highlight for a snowy/rocky peak effect
+				var p1_light = pos + Vector2(0, -7)
+				var p2_light = pos + Vector2(-4, 2)
+				var p3_light = pos + Vector2(4, 2)
+				draw_colored_polygon(PackedVector2Array([p1_light, p2_light, p3_light]), color_highlight)
+
+func _draw_voronoi_borders() -> void:
+	if not show_voronoi_borders:
+		return
+		
+	var cell_size = 8
+	for x in range(0, int(map_size.x), cell_size):
+		for y in range(0, int(map_size.y), cell_size):
+			var pos = Vector2(x, y)
+			
+			# Find nearest and second nearest points
+			var distances = []
+			for i in range(map_points.size()):
+				distances.append([i, pos.distance_to(map_points[i])])
+			distances.sort_custom(func(a, b): return a[1] < b[1])
+			
+			if distances.size() < 2:
+				continue
+				
+			var nearest_dist = distances[0][1]
+			var second_nearest_dist = distances[1][1]
+			var boundary_distance = second_nearest_dist - nearest_dist
+			
+			# Draw border where cells meet
+			if boundary_distance < 2.0:
+				draw_rect(Rect2(pos, Vector2(cell_size, cell_size)), Color(0, 0, 0, 0.3))
