@@ -18,7 +18,7 @@ func _ready() -> void:
 	_create_ui()
 	await get_tree().process_frame
 	_update_stats()
-	
+
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed:
 		if event.keycode == KEY_F1:
@@ -38,18 +38,21 @@ func _create_ui() -> void:
 	panel.offset_bottom = 10
 	add_child(panel)
 
-	# Main container
+	# Main container with scroll
+	var scroll = ScrollContainer.new()
+	scroll.anchor_left = 0.0
+	scroll.anchor_top = 0.0
+	scroll.anchor_right = 1.0
+	scroll.anchor_bottom = 1.0
+	scroll.offset_left = 10
+	scroll.offset_top = 10
+	scroll.offset_right = -10
+	scroll.offset_bottom = -10
+	panel.add_child(scroll)
+
 	vbox_container = VBoxContainer.new()
-	vbox_container.anchor_left = 0.0
-	vbox_container.anchor_top = 0.0
-	vbox_container.anchor_right = 1.0
-	vbox_container.anchor_bottom = 1.0
-	vbox_container.offset_left = 10
-	vbox_container.offset_top = 10
-	vbox_container.offset_right = -10
-	vbox_container.offset_bottom = -10
-	#vbox_container.separation = 8
-	panel.add_child(vbox_container)
+	vbox_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(vbox_container)
 
 	# Title
 	var title = Label.new()
@@ -108,6 +111,30 @@ func _create_ui() -> void:
 	# settlement_connection_deletion_chance slider
 	_add_slider("Connection Deletion", "settlement_connection_deletion_chance", 0.0, 1.0, 0.05)
 
+	# Separator for new features
+	var sep_features = HSeparator.new()
+	vbox_container.add_child(sep_features)
+
+	var features_label = Label.new()
+	features_label.text = "TERRAIN FEATURES"
+	features_label.add_theme_font_size_override("font_size", 12)
+	vbox_container.add_child(features_label)
+
+	# num_rivers slider
+	_add_slider("Num Rivers", "num_rivers", 0, 10, 1)
+
+	# river_branch_chance slider
+	_add_slider("River Branch %", "river_branch_chance", 0.0, 1.0, 0.05)
+
+	# river_max_length slider
+	_add_slider("River Max Length", "river_max_length", 5, 30, 1)
+
+	# forest_coverage slider
+	_add_slider("Forest Coverage", "forest_coverage", 0.0, 0.5, 0.05)
+
+	# forest_clusters slider
+	_add_slider("Forest Clusters", "forest_clusters", 1, 15, 1)
+
 	# Separator
 	var sep3 = HSeparator.new()
 	vbox_container.add_child(sep3)
@@ -119,13 +146,9 @@ func _create_ui() -> void:
 	vbox_container.add_child(stats_label)
 
 	# Stats container (will be updated)
-	var scroll = ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0, 300)
-	vbox_container.add_child(scroll)
-
 	stats_container = VBoxContainer.new()
 	stats_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(stats_container)
+	vbox_container.add_child(stats_container)
 
 	# Add refresh button at bottom
 	var refresh_btn = Button.new()
@@ -140,7 +163,9 @@ func _create_ui() -> void:
 	vbox_container.add_child(voronoi_btn)
 
 	# Add spacer at end
-	vbox_container.add_child(Control.new())
+	var spacer = Control.new()
+	spacer.custom_minimum_size = Vector2(0, 20)
+	vbox_container.add_child(spacer)
 
 func _add_slider(label_text: String, property: String, min_val: float, max_val: float, step: float) -> void:
 	var hbox = HBoxContainer.new()
@@ -161,7 +186,7 @@ func _add_slider(label_text: String, property: String, min_val: float, max_val: 
 	slider.value_changed.connect(func(value):
 		map.set(property, value)
 		_update_value_label(hbox, value, step)
-	)
+		)
 	hbox.add_child(slider)
 	
 	var value_label = Label.new()
@@ -201,6 +226,7 @@ func _update_stats() -> void:
 	var water_count = 0
 	var mountain_count = 0
 	var boundary_count = 0
+	var deep_sea_count = 0
 
 	for i in range(map.map_points.size()):
 		if map.boundary_point_indices.has(i):
@@ -213,8 +239,23 @@ func _update_stats() -> void:
 					village_count += 1
 				map.PointType.WATER:
 					water_count += 1
+					if map.point_properties[i].get("is_deep_sea", false):
+						deep_sea_count += 1
 				map.PointType.MOUNTAIN:
 					mountain_count += 1
+
+	# Count edge features
+	var shoreline_count = 0
+	var river_count = 0
+	var forest_count = 0
+
+	for edge in map.voronoi_edges:
+		if edge.is_shoreline:
+			shoreline_count += 1
+		if edge.edge_type == map.EdgeType.RIVER:
+			river_count += 1
+		if edge.edge_type == map.EdgeType.FOREST:
+			forest_count += 1
 
 	# Add stat labels
 	_add_stat_label(stats_container, "Total Points", map.map_points.size())
@@ -223,9 +264,13 @@ func _update_stats() -> void:
 	_add_stat_label(stats_container, "Cities", city_count)
 	_add_stat_label(stats_container, "Villages", village_count)
 	_add_stat_label(stats_container, "Water Tiles", water_count)
+	_add_stat_label(stats_container, "Deep Sea Tiles", deep_sea_count)
 	_add_stat_label(stats_container, "Mountains", mountain_count)
 	_add_stat_label(stats_container, "Connections", map.map_connections.size())
 	_add_stat_label(stats_container, "Voronoi Edges", map.voronoi_edges.size())
+	_add_stat_label(stats_container, "Shorelines", shoreline_count)
+	_add_stat_label(stats_container, "River Edges", river_count)
+	_add_stat_label(stats_container, "Forest Edges", forest_count)
 
 	# Map size
 	_add_stat_label(stats_container, "Map Size", "%.0fx%.0f" % [map.map_size.x, map.map_size.y])
