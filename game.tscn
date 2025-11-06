@@ -1,6 +1,7 @@
-[gd_scene load_steps=3 format=3 uid="uid://b4rkik4jo3j4x"]
+[gd_scene load_steps=4 format=3 uid="uid://b4rkik4jo3j4x"]
 
 [ext_resource type="PackedScene" uid="uid://cx60yq5q500q8" path="res://map/map.tscn" id="1_80nbo"]
+[ext_resource type="PackedScene" uid="uid://bu2sj4d4gfm08" path="res://debug_ui.tscn" id="1_debug"]
 [ext_resource type="Script" uid="uid://ctsxtqri62tol" path="res://game.gd" id="1_e2o6t"]
 
 [node name="Game" type="Node2D" node_paths=PackedStringArray("map")]
@@ -9,3 +10,9 @@ map = NodePath("Map")
 
 [node name="Map" parent="." instance=ExtResource("1_80nbo")]
 position = Vector2(220, 15)
+
+[node name="DebugUI" parent="." instance=ExtResource("1_debug")]
+
+[node name="HSlider" type="HSlider" parent="."]
+offset_right = 8.0
+offset_bottom = 16.0
