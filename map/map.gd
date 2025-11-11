@@ -1,8 +1,7 @@
-
 extends Node2D
 class_name GameMap
 
-enum PointType { CITY, VILLAGE, WATER, MOUNTAIN }
+enum PointType { CITY, VILLAGE, WATER, MOUNTAIN, FOREST }
 enum EdgeType { PATH, RIVER, FOREST }
 
 var map_points: Array[Vector2] = []
@@ -16,10 +15,11 @@ var noise: FastNoiseLite
 
 # New parameters for new features
 var num_rivers := 5
-var river_branch_chance := 0.1
-var river_max_length := 15
+var river_branch_chance := 0.01
+var river_continuation_chance := 0.5
 var forest_coverage := 0.1
 var forest_clusters := 30
+var village_to_forest_chance := 0.15  # Chance to convert village to forest
 
 # Terrain cache for fast rendering
 var terrain_cache: Image
@@ -90,20 +90,20 @@ func _generate_map() -> void:
 	# 5. Delete random villages (AFTER water expansion in _assign_terrain_types)
 	_delete_random_villages()
 
-	# 6. Build connections with proper Voronoi edges
+	# 6. Convert some villages to forests
+	_convert_villages_to_forests()
+
+	# 7. Build connections with proper Voronoi edges
 	_build_connections()
 
-	# 7. Ensure all non-mountain points are connected
+	# 8. Ensure all non-mountain points are connected
 	_ensure_connectivity()
 
-	# 8. Classify deep sea (after water is finalized)
+	# 9. Classify and compress deep sea (after water is finalized)
 	_classify_deep_sea()
 
-	# 9. Generate rivers (after shorelines are identified)
+	# 10. Generate rivers (after shorelines are identified)
 	_generate_rivers()
-
-	# 10. Generate forests (after all other features)
-	_generate_forests()
 
 	# Cache terrain and redraw
 	_cache_terrain()
@@ -124,6 +124,21 @@ func _delete_random_villages() -> void:
 
 	if villages_to_delete.size() > 0:
 		print("Deleted %d random villages" % villages_to_delete.size())
+
+func _convert_villages_to_forests() -> void:
+	"""Convert some villages to forest points"""
+	if village_to_forest_chance <= 0.0:
+		return
+
+	var forests_created = 0
+	for i in range(map_points.size()):
+		if point_types[i] == PointType.VILLAGE and not boundary_point_indices.has(i):
+			if randf() < village_to_forest_chance:
+				point_types[i] = PointType.FOREST
+				forests_created += 1
+
+	if forests_created > 0:
+		print("Converted %d villages to forests" % forests_created)
 
 func _generate_poisson_points(min_dist: float, count: int) -> Array[Vector2]:
 	var points: Array[Vector2] = []
@@ -411,7 +426,7 @@ func _build_connections() -> void:
 				"segment": voronoi_segment,
 				"type1": type1,
 				"type2": type2,
-				"edge_type": EdgeType.PATH,  # Will be modified by rivers/forests
+				"edge_type": EdgeType.PATH,  # Will be modified by rivers
 				"is_shoreline": false  # Will be set below
 			})
 
@@ -427,11 +442,20 @@ func _build_connections() -> void:
 		(type2 == PointType.CITY or type2 == PointType.VILLAGE):
 			should_connect = true
 
-		# Rule 3: Water to water connects (without distance restriction)
+		# Rule 3: Forests connect to settlements
+		elif (type1 == PointType.FOREST and (type2 == PointType.CITY or type2 == PointType.VILLAGE)) or \
+		(type2 == PointType.FOREST and (type1 == PointType.CITY or type1 == PointType.VILLAGE)):
+			should_connect = true
+
+		# Rule 4: Forests connect to other forests
+		elif type1 == PointType.FOREST and type2 == PointType.FOREST:
+			should_connect = true
+
+		# Rule 5: Water to water connects (without distance restriction)
 		elif type1 == PointType.WATER and type2 == PointType.WATER:
 			should_connect = true
 
-		# Rule 4: Coastal connections (water touching land) - with distance limit
+		# Rule 6: Coastal connections (water touching land) - with distance limit
 		elif allow_coastal_connections:
 			if (type1 == PointType.WATER and (type2 == PointType.CITY or type2 == PointType.VILLAGE)) or \
 			(type2 == PointType.WATER and (type1 == PointType.CITY or type1 == PointType.VILLAGE)):
@@ -496,9 +520,16 @@ func _delete_random_settlement_connections() -> void:
 		print("Deleted %d random settlement connections" % connections_to_remove.size())
 
 func _classify_deep_sea() -> void:
-	"""Classify WATER points as deep sea if ALL neighbors are also WATER"""
+	"""Classify deep sea and remove sparse interior deep sea points"""
+
+	# Step 1: Mark all boundary points as deep sea
+	for idx in boundary_point_indices:
+		if point_types[idx] == PointType.WATER:
+			point_properties[idx].is_deep_sea = true
+
+	# Step 2: Classify interior water points as deep sea if ALL neighbors are water
 	for i in range(map_points.size()):
-		if point_types[i] != PointType.WATER:
+		if point_types[i] != PointType.WATER or boundary_point_indices.has(i):
 			continue
 
 		var neighbors = delaunay_adjacency.get(i, [])
@@ -514,12 +545,14 @@ func _classify_deep_sea() -> void:
 		if all_neighbors_water:
 			point_properties[i].is_deep_sea = true
 
+
+
 	# Count for debugging
 	var deep_sea_count = 0
 	for prop in point_properties:
 		if prop.is_deep_sea:
 			deep_sea_count += 1
-	print("Classified %d deep sea points" % deep_sea_count)
+	print("Deep sea points %d" % [deep_sea_count])
 
 func _generate_rivers() -> void:
 	"""Generate river systems starting from shorelines"""
@@ -553,7 +586,7 @@ func _generate_rivers() -> void:
 
 		# Grow river inland
 		var visited_edges = {}
-		_grow_river_branch(land_idx, -1, 0, visited_edges)
+		_grow_river_branch(land_idx, -1, visited_edges)
 
 	# Count rivers for debugging
 	var river_count = 0
@@ -562,10 +595,8 @@ func _generate_rivers() -> void:
 			river_count += 1
 	print("Generated %d river edges" % river_count)
 
-func _grow_river_branch(current_idx: int, prev_idx: int, depth: int, visited_edges: Dictionary) -> void:
+func _grow_river_branch(current_idx: int, prev_idx: int, visited_edges: Dictionary) -> void:
 	"""Recursively grow river branch through land"""
-	if depth >= river_max_length:
-		return
 
 	# Find edges from current point
 	var candidate_edges = []
@@ -595,12 +626,8 @@ func _grow_river_branch(current_idx: int, prev_idx: int, depth: int, visited_edg
 		if edge.is_shoreline:
 			continue
 
-		# Skip if other point is water
-		if point_types[other_idx] == PointType.WATER:
-			continue
-
-		# Skip if other point is mountain
-		if point_types[other_idx] == PointType.MOUNTAIN:
+		# Skip if other point is water or mountain
+		if point_types[other_idx] == PointType.WATER or point_types[other_idx] == PointType.MOUNTAIN:
 			continue
 
 		# This is a valid candidate
@@ -609,141 +636,23 @@ func _grow_river_branch(current_idx: int, prev_idx: int, depth: int, visited_edg
 	if candidate_edges.size() == 0:
 		return
 
-	# Pick random candidate
+	# Pick random candidate for main continuation
 	var chosen = candidate_edges[randi() % candidate_edges.size()]
 	chosen.edge.edge_type = EdgeType.RIVER
 	visited_edges[chosen.edge_key] = true
 
-	# Chance to continue
-	if randf() < river_branch_chance:
-		_grow_river_branch(chosen.other_idx, current_idx, depth + 1, visited_edges)
+	# Chance to continue main branch
+	if randf() < river_continuation_chance:
+		_grow_river_branch(chosen.other_idx, current_idx, visited_edges)
 
-	# Chance to branch (try other candidates)
+	# Chance to create branches from other candidates
 	for candidate in candidate_edges:
 		if candidate.edge_key == chosen.edge_key:
 			continue
 		if randf() < river_branch_chance:
 			candidate.edge.edge_type = EdgeType.RIVER
 			visited_edges[candidate.edge_key] = true
-			_grow_river_branch(candidate.other_idx, current_idx, depth + 1, visited_edges)
-
-func _generate_forests() -> void:
-	"""Generate forest clusters on valid land edges"""
-	if forest_coverage <= 0.0 or forest_clusters <= 0:
-		return
-
-	# Find all valid edges for forests
-	var valid_edges = []
-	for edge in voronoi_edges:
-		# Must be between two land points
-		var type1 = point_types[edge.idx1]
-		var type2 = point_types[edge.idx2]
-
-		var is_land1 = (type1 == PointType.CITY or type1 == PointType.VILLAGE)
-		var is_land2 = (type2 == PointType.CITY or type2 == PointType.VILLAGE)
-
-		if not (is_land1 and is_land2):
-			continue
-
-		# Skip if already has feature
-		if edge.edge_type != EdgeType.PATH:
-			continue
-
-		# Skip shorelines
-		if edge.is_shoreline:
-			continue
-
-		valid_edges.append(edge)
-
-	if valid_edges.size() == 0:
-		print("No valid edges for forests")
-		return
-
-	# Calculate target number of forest edges
-	var target_forest_edges = int(valid_edges.size() * forest_coverage)
-	var edges_per_cluster = max(1, target_forest_edges / forest_clusters)
-
-	print("Generating forests: %d target edges, %d clusters, ~%d edges per cluster" % [target_forest_edges, forest_clusters, edges_per_cluster])
-
-	# Generate clusters
-	var total_forest_edges = 0
-	for cluster_num in range(forest_clusters):
-		# Pick random seed edge
-		var available = []
-		for edge in valid_edges:
-			if edge.edge_type == EdgeType.PATH:
-				available.append(edge)
-
-		if available.size() == 0:
-			break
-
-		var seed_edge = available[randi() % available.size()]
-		seed_edge.edge_type = EdgeType.FOREST
-		total_forest_edges += 1
-
-		# Grow cluster
-		var cluster_edges = [seed_edge]
-		var cluster_size = 1
-
-		while cluster_size < edges_per_cluster:
-			# Find adjacent edges to current cluster
-			var adjacent_edges = []
-			for cluster_edge in cluster_edges:
-				# Find edges that share a vertex with this cluster edge
-				for candidate_edge in valid_edges:
-					if candidate_edge.edge_type != EdgeType.PATH:
-						continue
-
-					# Check if edges share a vertex
-					var shares_vertex = false
-					if cluster_edge.idx1 == candidate_edge.idx1 or cluster_edge.idx1 == candidate_edge.idx2 or \
-					cluster_edge.idx2 == candidate_edge.idx1 or cluster_edge.idx2 == candidate_edge.idx2:
-						shares_vertex = true
-
-					if shares_vertex and not adjacent_edges.has(candidate_edge):
-						adjacent_edges.append(candidate_edge)
-
-			if adjacent_edges.size() == 0:
-				break
-
-			# Try to grow to adjacent edges (60% chance each)
-			var grew = false
-			for adj_edge in adjacent_edges:
-				if randf() < 0.6:
-					adj_edge.edge_type = EdgeType.FOREST
-					cluster_edges.append(adj_edge)
-					cluster_size += 1
-					total_forest_edges += 1
-					grew = true
-
-					if cluster_size >= edges_per_cluster:
-						break
-
-			if not grew:
-				break
-
-	print("Generated %d forest edges in %d clusters" % [total_forest_edges, forest_clusters])
-
-	# Update map_connections to block paths through forests
-	var connections_to_remove = []
-	for i in range(map_connections.size()):
-		var connection = map_connections[i]
-		var idx1 = connection.idx1
-		var idx2 = connection.idx2
-
-		# Find corresponding voronoi edge
-		for edge in voronoi_edges:
-			if (edge.idx1 == idx1 and edge.idx2 == idx2) or (edge.idx1 == idx2 and edge.idx2 == idx1):
-				if edge.edge_type == EdgeType.FOREST:
-					connections_to_remove.append(i)
-					break
-
-	# Remove forest-blocked connections in reverse order
-	for i in range(connections_to_remove.size() - 1, -1, -1):
-		map_connections.remove_at(connections_to_remove[i])
-
-	if connections_to_remove.size() > 0:
-		print("Blocked %d paths through forests" % connections_to_remove.size())
+			_grow_river_branch(candidate.other_idx, current_idx, visited_edges)
 
 func _cache_terrain() -> void:
 	print("Caching terrain...")
@@ -939,10 +848,6 @@ func _draw_terrain_features() -> void:
 		if edge.edge_type == EdgeType.RIVER:
 			draw_line(segment[0], segment[1], Color(0.2, 0.4, 0.8), 2.5)
 
-		# Draw forests (dark green)
-		if edge.edge_type == EdgeType.FOREST:
-			draw_line(segment[0], segment[1], Color(0.2, 0.5, 0.2), 3.0)
-
 func _draw_voronoi_borders() -> void:
 	# Draw all calculated Voronoi edges with color coding
 	for edge_data in voronoi_edges:
@@ -987,6 +892,11 @@ func _get_terrain_color(pos: Vector2, type: int, properties: Dictionary) -> Colo
 			var noise_val = noise.get_noise_2d(pos.x, pos.y)
 			return base.lerp(Color(0.58, 0.75, 0.35) if noise_val > 0 else Color(0.36, 0.51, 0.25),
 			abs(noise_val) * 0.4)
+		PointType.FOREST:
+			var base = Color(0.25, 0.45, 0.25)
+			var noise_val = noise.get_noise_2d(pos.x, pos.y)
+			return base.lerp(Color(0.35, 0.55, 0.30) if noise_val > 0 else Color(0.20, 0.35, 0.20),
+			abs(noise_val) * 0.4)
 		PointType.MOUNTAIN:
 			var base = Color(0.45, 0.4, 0.35)
 			var noise_val = noise.get_noise_2d(pos.x * 0.5, pos.y * 0.5)
@@ -1007,7 +917,11 @@ func _draw_connections() -> void:
 		var type1 = point_types[idx1]
 		var type2 = point_types[idx2]
 
-		if type1 == PointType.WATER or type2 == PointType.WATER:
+		# Forest connections are green
+		if type1 == PointType.FOREST or type2 == PointType.FOREST:
+			draw_line(p1, voronoi_point, Color(0.2, 0.7, 0.3, 0.1), 3.0)
+			draw_line(voronoi_point, p2, Color(0.2, 0.7, 0.3, 0.1), 3.0)
+		elif type1 == PointType.WATER or type2 == PointType.WATER:
 			# Draw two-segment dashed line through Voronoi point
 			_draw_dashed_line(p1, voronoi_point, Color(0.5803922, 0.7372549, 0.9019608, 0.6), 2.5, 8.0, 6.0)
 			_draw_dashed_line(voronoi_point, p2, Color(0.65882355, 0.80784315, 0.9529412, 0.6), 2.5, 8.0, 6.0)
@@ -1045,6 +959,13 @@ func _draw_points() -> void:
 			PointType.VILLAGE:
 				draw_circle(pos, 5, Color(0.4, 0.35, 0.3))
 				draw_circle(pos, 3, Color(0.65, 0.6, 0.55))
+			PointType.FOREST:
+				# Draw tree-like icon
+				var pts = PackedVector2Array([
+				pos + Vector2(0, -7), pos + Vector2(-6, 3), pos + Vector2(6, 3)])
+				draw_colored_polygon(pts, Color(0.15, 0.4, 0.15))
+				draw_circle(pos + Vector2(0, -3), 5, Color(0.2, 0.55, 0.2))
+				draw_circle(pos + Vector2(0, -3), 3, Color(0.3, 0.65, 0.25))
 			PointType.WATER:
 				draw_circle(pos, 7, Color(0.15, 0.28, 0.45))
 				draw_circle(pos, 5, Color(0.25, 0.42, 0.62))

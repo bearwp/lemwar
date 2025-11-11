@@ -9,7 +9,7 @@ script = ExtResource("1_e2o6t")
 map = NodePath("Map")
 
 [node name="Map" parent="." instance=ExtResource("1_80nbo")]
-position = Vector2(220, 15)
+position = Vector2(105, 32)
 
 [node name="DebugUI" parent="." instance=ExtResource("1_debug")]
 

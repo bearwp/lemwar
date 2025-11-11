@@ -127,13 +127,17 @@ func _create_ui() -> void:
 	_add_slider("River Branch %", "river_branch_chance", 0.0, 1.0, 0.05)
 
 	# river_max_length slider
-	_add_slider("River Max Length", "river_max_length", 5, 30, 1)
+	_add_slider("River Continuation", "river_continuation_chance", 5, 30, 1)
 
 	# forest_coverage slider
 	_add_slider("Forest Coverage", "forest_coverage", 0.0, 0.5, 0.05)
 
 	# forest_clusters slider
 	_add_slider("Forest Clusters", "forest_clusters", 1, 15, 1)
+	
+
+
+
 
 	# Separator
 	var sep3 = HSeparator.new()
