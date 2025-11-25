@@ -18,9 +18,11 @@ config/icon="res://icon.svg"
 [autoload]
 
 Game="*res://game.tscn"
+State="*res://game_state.gd"
 
 [display]
 
+window/size/viewport_height=1152
 window/stretch/mode="canvas_items"
 
 [rendering]

@@ -1,33 +1,77 @@
-
 extends CanvasLayer
 class_name DebugUI
 
 @export var map: GameMap
+@export var world_chat: Node  # Reference to your AI chat system
 
 var panel: Panel
 var vbox_container: VBoxContainer
 var stats_container: VBoxContainer
+var ai_progress_label: Label
+var ai_generate_button: Button
 var is_open: bool = true
 
+# Slider configuration for DRY principle
+var slider_configs = [
+					 # [label, property, min, max, step]
+						 ["Num Points", "num_points", 50, 300, 1],
+						 ["Num Cities", "num_cities", 1, 20, 1],
+						 ["Num Mountains", "num_mountains", 0, 15, 1],
+						 ["Water Sources", "num_water_sources", 1, 20, 1],
+						 ["Water Expansion", "water_expansion_chance", 0.0, 1.0, 0.05],
+						 ["Min Distance", "min_distance", 5.0, 150.0, 5.0],
+						 ["Water Range", "max_water_connection_distance", 20.0, 200.0, 5.0],
+						 ["Boundary Padding", "boundary_padding", 50.0, 200.0, 10.0],
+						 ["Village Deletion", "village_deletion_chance", 0.0, 1.0, 0.05],
+						 ["Connection Deletion", "settlement_connection_deletion_chance", 0.0, 1.0, 0.05],
+					 ]
+
+var terrain_slider_configs = [
+								 ["Num Rivers", "num_rivers", 0, 10, 1],
+								 ["River Branch %", "river_branch_chance", 0.0, 1.0, 0.05],
+								 ["River Continuation", "river_continuation_chance", 5, 30, 1],
+								 ["Forest Coverage", "forest_coverage", 0.0, 0.5, 0.05],
+								 ["Forest Clusters", "forest_clusters", 1, 15, 1],
+							 ]
+
 func _ready() -> void:
-	# Find the map node in the parent's parent (Game scene)
 	map = get_parent().get_node("Map")
 	if map == null:
 		print("ERROR: Could not find Map node!")
 		return
+	
+	
+
+# Connect to world_chat signals if available
+	if world_chat:
+		world_chat.description_generation_progress.connect(_on_ai_progress)
+		world_chat.description_generation_complete.connect(_on_ai_complete)
+
 	_create_ui()
 	await get_tree().process_frame
 	_update_stats()
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed:
-		if event.keycode == KEY_F1:
-			is_open = !is_open
-			panel.visible = is_open
-			get_tree().root.set_input_as_handled()
+	if event is InputEventKey and event.pressed and event.keycode == KEY_F1:
+		is_open = !is_open
+		panel.visible = is_open
+		get_tree().root.set_input_as_handled()
+
+# ============================================================================
+# UI CREATION
+# ============================================================================
 
 func _create_ui() -> void:
-	# Main panel
+	_create_main_panel()
+	_create_title_section()
+	_create_generation_button()
+	_create_parameters_section()
+	_create_terrain_section()
+	_create_stats_section()
+	_create_debug_section()
+
+func _create_main_panel() -> void:
+	"""Create the main panel container."""
 	panel = Panel.new()
 	panel.custom_minimum_size = Vector2(350, 800)
 	panel.anchor_left = 1.0
@@ -38,7 +82,6 @@ func _create_ui() -> void:
 	panel.offset_bottom = 10
 	add_child(panel)
 
-	# Main container with scroll
 	var scroll = ScrollContainer.new()
 	scroll.anchor_left = 0.0
 	scroll.anchor_top = 0.0
@@ -54,133 +97,106 @@ func _create_ui() -> void:
 	vbox_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(vbox_container)
 
-	# Title
+func _create_title_section() -> void:
+	"""Create the title and first separator."""
 	var title = Label.new()
 	title.text = "MAP DEBUG UI (F1 to toggle)"
 	title.add_theme_font_size_override("font_size", 16)
 	vbox_container.add_child(title)
 
-	# Separator
-	var sep1 = HSeparator.new()
-	vbox_container.add_child(sep1)
+	_add_separator()
 
-	# Generate button
+func _create_generation_button() -> void:
+	"""Create the generate new map button."""
 	var generate_btn = Button.new()
 	generate_btn.text = "Generate New Map"
 	generate_btn.custom_minimum_size = Vector2(0, 40)
 	generate_btn.pressed.connect(_on_generate_pressed)
 	vbox_container.add_child(generate_btn)
 
-	# Separator
-	var sep2 = HSeparator.new()
-	vbox_container.add_child(sep2)
+	_add_separator()
 
-	# Parameters section
-	var params_label = Label.new()
-	params_label.text = "GENERATION PARAMETERS"
-	params_label.add_theme_font_size_override("font_size", 12)
-	vbox_container.add_child(params_label)
+func _create_parameters_section() -> void:
+	"""Create generation parameters section."""
+	_add_section_label("GENERATION PARAMETERS")
+	for config in slider_configs:
+		_add_slider(config[0], config[1], config[2], config[3], config[4])
 
-	# num_points slider
-	_add_slider("Num Points", "num_points", 50, 300, 1)
+func _create_terrain_section() -> void:
+	"""Create terrain features section."""
+	_add_separator()
+	_add_section_label("TERRAIN FEATURES")
+	for config in terrain_slider_configs:
+		_add_slider(config[0], config[1], config[2], config[3], config[4])
 
-	# num_cities slider
-	_add_slider("Num Cities", "num_cities", 1, 20, 1)
+func _create_stats_section() -> void:
+	"""Create stats section."""
+	_add_separator()
+	_add_section_label("GENERATION STATS")
 
-	# num_mountains slider
-	_add_slider("Num Mountains", "num_mountains", 0, 15, 1)
-
-	# num_water_sources slider
-	_add_slider("Water Sources", "num_water_sources", 1, 20, 1)
-
-	# water_expansion_chance slider
-	_add_slider("Water Expansion", "water_expansion_chance", 0.0, 1.0, 0.05)
-
-	# min_distance slider
-	_add_slider("Min Distance", "min_distance", 20.0, 150.0, 5.0)
-
-	# max_water_connection_distance slider
-	_add_slider("Water Range", "max_water_connection_distance", 20.0, 200.0, 5.0)
-
-	# boundary_padding slider
-	_add_slider("Boundary Padding", "boundary_padding", 50.0, 200.0, 10.0)
-
-	# village_deletion_chance slider
-	_add_slider("Village Deletion", "village_deletion_chance", 0.0, 1.0, 0.05)
-
-	# settlement_connection_deletion_chance slider
-	_add_slider("Connection Deletion", "settlement_connection_deletion_chance", 0.0, 1.0, 0.05)
-
-	# Separator for new features
-	var sep_features = HSeparator.new()
-	vbox_container.add_child(sep_features)
-
-	var features_label = Label.new()
-	features_label.text = "TERRAIN FEATURES"
-	features_label.add_theme_font_size_override("font_size", 12)
-	vbox_container.add_child(features_label)
-
-	# num_rivers slider
-	_add_slider("Num Rivers", "num_rivers", 0, 10, 1)
-
-	# river_branch_chance slider
-	_add_slider("River Branch %", "river_branch_chance", 0.0, 1.0, 0.05)
-
-	# river_max_length slider
-	_add_slider("River Continuation", "river_continuation_chance", 5, 30, 1)
-
-	# forest_coverage slider
-	_add_slider("Forest Coverage", "forest_coverage", 0.0, 0.5, 0.05)
-
-	# forest_clusters slider
-	_add_slider("Forest Clusters", "forest_clusters", 1, 15, 1)
-	
-
-
-
-
-	# Separator
-	var sep3 = HSeparator.new()
-	vbox_container.add_child(sep3)
-
-	# Stats section
-	var stats_label = Label.new()
-	stats_label.text = "GENERATION STATS"
-	stats_label.add_theme_font_size_override("font_size", 12)
-	vbox_container.add_child(stats_label)
-
-	# Stats container (will be updated)
 	stats_container = VBoxContainer.new()
 	stats_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox_container.add_child(stats_container)
 
-	# Add refresh button at bottom
 	var refresh_btn = Button.new()
 	refresh_btn.text = "Refresh Stats"
 	refresh_btn.pressed.connect(_update_stats)
 	vbox_container.add_child(refresh_btn)
 
-	# Toggle Voronoi debug
+func _create_debug_section() -> void:
+	"""Create debug and AI generation section."""
 	var voronoi_btn = Button.new()
 	voronoi_btn.text = "Toggle Voronoi Debug"
 	voronoi_btn.pressed.connect(_on_toggle_voronoi)
 	vbox_container.add_child(voronoi_btn)
 
-	# Add spacer at end
+	_add_separator()
+	_add_section_label("AI GENERATION (RAG)")
+
+	ai_generate_button = Button.new()
+	ai_generate_button.text = "Generate Point Descriptions"
+	ai_generate_button.custom_minimum_size = Vector2(0, 40)
+	ai_generate_button.pressed.connect(_on_generate_ai_descriptions)
+	vbox_container.add_child(ai_generate_button)
+
+	ai_progress_label = Label.new()
+	ai_progress_label.text = "Ready"
+	ai_progress_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox_container.add_child(ai_progress_label)
+
+	# Spacer
 	var spacer = Control.new()
 	spacer.custom_minimum_size = Vector2(0, 20)
 	vbox_container.add_child(spacer)
 
+# ============================================================================
+# UI HELPERS
+# ============================================================================
+
+func _add_separator() -> void:
+	"""Add a separator line."""
+	vbox_container.add_child(HSeparator.new())
+
+func _add_section_label(text: String) -> void:
+	"""Add a section label."""
+	var label = Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", 12)
+	vbox_container.add_child(label)
+
 func _add_slider(label_text: String, property: String, min_val: float, max_val: float, step: float) -> void:
+	"""Create and add a slider control."""
 	var hbox = HBoxContainer.new()
 	hbox.custom_minimum_size = Vector2(0, 30)
 	vbox_container.add_child(hbox)
 
+	# Label
 	var label = Label.new()
 	label.text = label_text
 	label.custom_minimum_size = Vector2(120, 0)
 	hbox.add_child(label)
 
+	# Slider
 	var slider = HSlider.new()
 	slider.min_value = min_val
 	slider.max_value = max_val
@@ -189,101 +205,28 @@ func _add_slider(label_text: String, property: String, min_val: float, max_val: 
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.value_changed.connect(func(value):
 		map.set(property, value)
-		_update_value_label(hbox, value, step)
+		_update_slider_value_label(hbox, value, step)
 		)
 	hbox.add_child(slider)
 	
+	# Value label
 	var value_label = Label.new()
 	value_label.text = _format_value(map.get(property), step)
 	value_label.custom_minimum_size = Vector2(80, 0)
 	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	hbox.add_child(value_label)
 
-func _update_value_label(hbox: HBoxContainer, value: float, step: float) -> void:
+func _update_slider_value_label(hbox: HBoxContainer, value: float, step: float) -> void:
+	"""Update the value label for a slider."""
 	var value_label = hbox.get_child(2)
 	value_label.text = _format_value(value, step)
 
 func _format_value(value: float, step: float) -> String:
-	if step < 1.0:
-		return "%.2f" % value
-	else:
-		return "%d" % int(value)
-
-func _on_generate_pressed() -> void:
-	print("Generating new map...")
-	map.generate_new_map()
-	_update_stats()
-	print("Map generation complete!")
-
-func _update_stats() -> void:
-	if stats_container == null:
-		print("Stats container not ready yet")
-		return
-
-	# Clear existing stats
-	for child in stats_container.get_children():
-		child.queue_free()
-
-	# Count terrain types
-	var city_count = 0
-	var village_count = 0
-	var water_count = 0
-	var mountain_count = 0
-	var boundary_count = 0
-	var deep_sea_count = 0
-
-	for i in range(map.map_points.size()):
-		if map.boundary_point_indices.has(i):
-			boundary_count += 1
-		else:
-			match map.point_types[i]:
-				map.PointType.CITY:
-					city_count += 1
-				map.PointType.VILLAGE:
-					village_count += 1
-				map.PointType.WATER:
-					water_count += 1
-					if map.point_properties[i].get("is_deep_sea", false):
-						deep_sea_count += 1
-				map.PointType.MOUNTAIN:
-					mountain_count += 1
-
-	# Count edge features
-	var shoreline_count = 0
-	var river_count = 0
-	var forest_count = 0
-
-	for edge in map.voronoi_edges:
-		if edge.is_shoreline:
-			shoreline_count += 1
-		if edge.edge_type == map.EdgeType.RIVER:
-			river_count += 1
-		if edge.edge_type == map.EdgeType.FOREST:
-			forest_count += 1
-
-	# Add stat labels
-	_add_stat_label(stats_container, "Total Points", map.map_points.size())
-	_add_stat_label(stats_container, "Interior Points", map.map_points.size() - boundary_count)
-	_add_stat_label(stats_container, "Boundary Points", boundary_count)
-	_add_stat_label(stats_container, "Cities", city_count)
-	_add_stat_label(stats_container, "Villages", village_count)
-	_add_stat_label(stats_container, "Water Tiles", water_count)
-	_add_stat_label(stats_container, "Deep Sea Tiles", deep_sea_count)
-	_add_stat_label(stats_container, "Mountains", mountain_count)
-	_add_stat_label(stats_container, "Connections", map.map_connections.size())
-	_add_stat_label(stats_container, "Voronoi Edges", map.voronoi_edges.size())
-	_add_stat_label(stats_container, "Shorelines", shoreline_count)
-	_add_stat_label(stats_container, "River Edges", river_count)
-	_add_stat_label(stats_container, "Forest Edges", forest_count)
-
-	# Map size
-	_add_stat_label(stats_container, "Map Size", "%.0fx%.0f" % [map.map_size.x, map.map_size.y])
-
-	# Cache info
-	if map.terrain_colors_cache:
-		_add_stat_label(stats_container, "Cache Size", "%dx%d" % [map.terrain_colors_cache.get_width(), map.terrain_colors_cache.get_height()])
+	"""Format a value based on step size."""
+	return "%.2f" % value if step < 1.0 else "%d" % int(value)
 
 func _add_stat_label(container: VBoxContainer, stat_name: String, value) -> void:
+	"""Add a stat label to a container."""
 	var hbox = HBoxContainer.new()
 	hbox.custom_minimum_size = Vector2(0, 24)
 	container.add_child(hbox)
@@ -294,13 +237,118 @@ func _add_stat_label(container: VBoxContainer, stat_name: String, value) -> void
 	hbox.add_child(name_label)
 
 	var value_label = Label.new()
-	if value is String:
-		value_label.text = value
-	else:
-		value_label.text = str(value)
+	value_label.text = str(value)
 	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	hbox.add_child(value_label)
 
+# ============================================================================
+# STATS UPDATE
+# ============================================================================
+
+func _update_stats() -> void:
+	"""Update and display all map statistics."""
+	if stats_container == null:
+		print("Stats container not ready yet")
+		return
+
+	# Clear existing stats
+	for child in stats_container.get_children():
+		child.queue_free()
+
+	# Count terrain types
+	var terrain_counts = _count_terrain_types()
+	var shoreline_count = 0
+
+	for edge in map.voronoi_edges:
+		if edge.is_shoreline:
+			shoreline_count += 1
+
+	# Add stat labels
+	_add_stat_label(stats_container, "Total Points", map.map_points.size())
+	_add_stat_label(stats_container, "Interior Points", map.map_points.size() - terrain_counts["boundary"])
+	_add_stat_label(stats_container, "Boundary Points", terrain_counts["boundary"])
+	_add_stat_label(stats_container, "Cities", terrain_counts["cities"])
+	_add_stat_label(stats_container, "Villages", terrain_counts["villages"])
+	_add_stat_label(stats_container, "Water Tiles", terrain_counts["water"])
+	_add_stat_label(stats_container, "Deep Sea Tiles", terrain_counts["deep_sea"])
+	_add_stat_label(stats_container, "Mountains", terrain_counts["mountains"])
+	_add_stat_label(stats_container, "Connections", map.map_connections.size())
+	_add_stat_label(stats_container, "Voronoi Edges", map.voronoi_edges.size())
+	_add_stat_label(stats_container, "Shorelines", shoreline_count)
+	_add_stat_label(stats_container, "Map Size", "%.0fx%.0f" % [map.map_size.x, map.map_size.y])
+
+	if map.terrain_colors_cache:
+		_add_stat_label(stats_container, "Cache Size", "%dx%d" % [map.terrain_colors_cache.get_width(), map.terrain_colors_cache.get_height()])
+
+func _count_terrain_types() -> Dictionary:
+	"""Count all terrain types on the map."""
+	var counts = {
+					 "cities": 0,
+					 "villages": 0,
+					 "water": 0,
+					 "mountains": 0,
+					 "boundary": 0,
+					 "deep_sea": 0
+				 }
+
+	for i in range(map.map_points.size()):
+		if map.boundary_point_indices.has(i):
+			counts["boundary"] += 1
+		else:
+			match map.point_types[i]:
+				map.PointType.CITY:
+					counts["cities"] += 1
+				map.PointType.VILLAGE:
+					counts["villages"] += 1
+				map.PointType.WATER:
+					counts["water"] += 1
+					if map.point_properties[i].get("is_deep_sea", false):
+						counts["deep_sea"] += 1
+				map.PointType.MOUNTAIN:
+					counts["mountains"] += 1
+
+	return counts
+
+# ============================================================================
+# BUTTON CALLBACKS
+# ============================================================================
+
+func _on_generate_pressed() -> void:
+	"""Generate a new map."""
+	print("Generating new map...")
+	map.generate_new_map()
+	_update_stats()
+	print("Map generation complete!")
+
 func _on_toggle_voronoi() -> void:
+	"""Toggle Voronoi debug display."""
 	map._on_toggle_voronoi_debug()
 	_update_stats()
+
+func _on_generate_ai_descriptions() -> void:
+	"""Trigger AI description generation."""
+	if world_chat == null:
+		print("ERROR: world_chat not assigned!")
+		ai_progress_label.text = "ERROR: No world_chat"
+		world_chat = State.world_chat
+		return
+
+	if world_chat.generation_in_progress:
+		print("AI generation already in progress!")
+		return
+
+	ai_generate_button.disabled = true
+	ai_progress_label.text = "Starting..."
+
+	# Trigger the world_chat to do the work
+	world_chat.generate_map_descriptions(map)
+
+func _on_ai_progress(current: int, total: int) -> void:
+	"""Called by world_chat signal as generation progresses."""
+	ai_progress_label.text = "Processing %d/%d..." % [current, total]
+
+func _on_ai_complete(points_processed: int) -> void:
+	"""Called by world_chat signal when generation is complete."""
+	ai_generate_button.disabled = false
+	ai_progress_label.text = "Complete! %d points processed" % points_processed
+	print("AI description generation finished from UI")

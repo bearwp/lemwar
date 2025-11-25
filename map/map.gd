@@ -1,17 +1,25 @@
 extends Node2D
 class_name GameMap
 
+func _enter_tree():
+	add_to_group("game_map")
+
 enum PointType { CITY, VILLAGE, WATER, MOUNTAIN, FOREST }
-enum EdgeType { PATH, RIVER, FOREST }
+enum EdgeType { PATH }
 
 var map_points: Array[Vector2] = []
 var point_types: Array[int] = []
 var point_properties: Array[Dictionary] = []  # For is_deep_sea flag
+var point_names: Array[String] = [] # For storing custom names for points
+var village_densities: Array[float] = []  # Population density for each village
 var boundary_point_indices: Array[int] = []  # Track which points are artificial boundary
 var map_connections: Array[Dictionary] = []  # Now stores {idx1, idx2, voronoi_point, edge_type}
 var voronoi_edges: Array[Dictionary] = []  # Stores all Voronoi edges for debug and terrain features
 var delaunay_adjacency: Dictionary = {}  # Cache of neighbor relationships
 var noise: FastNoiseLite
+
+var interactive_points: Array[InteractivePoint] = []
+var interactive_paths: Array[InteractivePath] = []
 
 # New parameters for new features
 var num_rivers := 5
@@ -20,6 +28,8 @@ var river_continuation_chance := 0.5
 var forest_coverage := 0.1
 var forest_clusters := 30
 var village_to_forest_chance := 0.15  # Chance to convert village to forest
+var village_min_density := 0.3  # Minimum population density (0.0-1.0)
+var village_max_density := 1.0  # Maximum population density (0.0-1.0)
 
 # Terrain cache for fast rendering
 var terrain_cache: Image
@@ -70,6 +80,8 @@ func _generate_map() -> void:
 	terrain_colors_cache = null
 	point_types.clear()
 	point_properties.clear()
+	point_names.clear() # Clear point names
+	village_densities.clear()
 	map_connections.clear()
 	voronoi_edges.clear()
 	delaunay_adjacency.clear()
@@ -102,12 +114,13 @@ func _generate_map() -> void:
 	# 9. Classify and compress deep sea (after water is finalized)
 	_classify_deep_sea()
 
-	# 10. Generate rivers (after shorelines are identified)
-	_generate_rivers()
 
 	# Cache terrain and redraw
 	_cache_terrain()
 	queue_redraw()
+
+	# Create interactive layer
+	_create_interactive_layer()
 
 func _delete_random_villages() -> void:
 	if village_deletion_chance <= 0.0:
@@ -121,6 +134,7 @@ func _delete_random_villages() -> void:
 
 	for village_idx in villages_to_delete:
 		point_types[village_idx] = PointType.WATER
+		village_densities[village_idx] = 0.0  # Clear density
 
 	if villages_to_delete.size() > 0:
 		print("Deleted %d random villages" % villages_to_delete.size())
@@ -135,6 +149,7 @@ func _convert_villages_to_forests() -> void:
 		if point_types[i] == PointType.VILLAGE and not boundary_point_indices.has(i):
 			if randf() < village_to_forest_chance:
 				point_types[i] = PointType.FOREST
+				village_densities[i] = 0.0  # Clear density
 				forests_created += 1
 
 	if forests_created > 0:
@@ -196,10 +211,14 @@ func _add_boundary_ring() -> void:
 func _assign_terrain_types() -> void:
 	point_types.resize(map_points.size())
 	point_properties.resize(map_points.size())
+	point_names.resize(map_points.size())
+	village_densities.resize(map_points.size())
 
-	# Initialize all properties
+	# Initialize all properties and names
 	for i in range(map_points.size()):
 		point_properties[i] = {"is_deep_sea": false}
+		point_names[i] = "Point %d" % i # Default name
+		village_densities[i] = 0.0  # Default no density
 
 	# Mark all boundary points as water
 	for idx in boundary_point_indices:
@@ -243,6 +262,8 @@ func _assign_terrain_types() -> void:
 	# Villages (everything else - these CAN become water)
 	while idx < available_indices.size():
 		point_types[available_indices[idx]] = PointType.VILLAGE
+		# Assign random population density to each village
+		village_densities[available_indices[idx]] = randf_range(village_min_density, village_max_density)
 		idx += 1
 
 	# Create initial water sources
@@ -426,7 +447,7 @@ func _build_connections() -> void:
 				"segment": voronoi_segment,
 				"type1": type1,
 				"type2": type2,
-				"edge_type": EdgeType.PATH,  # Will be modified by rivers
+				"edge_type": EdgeType.PATH,
 				"is_shoreline": false  # Will be set below
 			})
 
@@ -554,105 +575,65 @@ func _classify_deep_sea() -> void:
 			deep_sea_count += 1
 	print("Deep sea points %d" % [deep_sea_count])
 
-func _generate_rivers() -> void:
-	"""Generate river systems starting from shorelines"""
-	if num_rivers <= 0:
-		return
+func _create_interactive_layer() -> void:
+	"""Create interactive nodes for points and paths"""
+	# Clear old interactive elements
+	for point in interactive_points:
+		if point:
+			point.queue_free()
+	interactive_points.clear()
 
-	# Find all shoreline edges
-	var shoreline_edges = []
-	for edge in voronoi_edges:
-		if edge.is_shoreline:
-			shoreline_edges.append(edge)
+	for path in interactive_paths:
+		if path:
+			path.queue_free()
+	interactive_paths.clear()
 
-	if shoreline_edges.size() == 0:
-		print("No shoreline edges found for rivers")
-		return
-
-	# Generate river systems
-	for river_num in range(num_rivers):
-		# Pick random shoreline edge
-		var start_edge = shoreline_edges[randi() % shoreline_edges.size()]
-
-		# Start river from the land side
-		var land_idx = -1
-		if point_types[start_edge.idx1] != PointType.WATER:
-			land_idx = start_edge.idx1
-		elif point_types[start_edge.idx2] != PointType.WATER:
-			land_idx = start_edge.idx2
-
-		if land_idx == -1:
+	# Create interactive points (skip boundary points)
+	for i in range(map_points.size()):
+		if boundary_point_indices.has(i):
+			interactive_points.append(null)
 			continue
 
-		# Grow river inland
-		var visited_edges = {}
-		_grow_river_branch(land_idx, -1, visited_edges)
+		var interactive_point = InteractivePoint.new()
+		interactive_point.global_position = map_points[i]
+		interactive_point.z_index = 10 # Draw points on top of paths
+		interactive_point.setup(i, point_types[i], self)
+		add_child(interactive_point)
+		interactive_points.append(interactive_point)
 
-	# Count rivers for debugging
-	var river_count = 0
-	for edge in voronoi_edges:
-		if edge.edge_type == EdgeType.RIVER:
-			river_count += 1
-	print("Generated %d river edges" % river_count)
+	# Build neighbor references
+	for connection in map_connections:
+		var idx1 = connection.idx1
+		var idx2 = connection.idx2
 
-func _grow_river_branch(current_idx: int, prev_idx: int, visited_edges: Dictionary) -> void:
-	"""Recursively grow river branch through land"""
+		if idx1 < interactive_points.size() and idx2 < interactive_points.size():
+			var point1 = interactive_points[idx1]
+			var point2 = interactive_points[idx2]
 
-	# Find edges from current point
-	var candidate_edges = []
-	for edge in voronoi_edges:
-		var other_idx = -1
-		if edge.idx1 == current_idx:
-			other_idx = edge.idx2
-		elif edge.idx2 == current_idx:
-			other_idx = edge.idx1
-		else:
-			continue
+			if point1 and point2:
+				if not point1.neighbors.has(point2):
+					point1.neighbors.append(point2)
+				if not point2.neighbors.has(point1):
+					point2.neighbors.append(point1)
 
-		# Skip if same as previous point (don't backtrack)
-		if other_idx == prev_idx:
-			continue
+	# Create interactive paths
+	for connection in map_connections:
+		var idx1 = connection.idx1
+		var idx2 = connection.idx2
 
-		# Skip if already visited this edge
-		var edge_key = "%d_%d" % [min(edge.idx1, edge.idx2), max(edge.idx1, edge.idx2)]
-		if visited_edges.has(edge_key):
-			continue
+		if idx1 < interactive_points.size() and idx2 < interactive_points.size():
+			var point1 = interactive_points[idx1]
+			var point2 = interactive_points[idx2]
 
-		# Skip if edge already has a feature
-		if edge.edge_type != EdgeType.PATH:
-			continue
+			if point1 and point2:
+				var interactive_path = InteractivePath.new()
+				interactive_path.z_index = 5 # Draw paths below points
+				interactive_path.setup(point1, point2, connection.voronoi_point, connection)
+				add_child(interactive_path)
+				interactive_paths.append(interactive_path)
 
-		# Skip if shoreline or already river
-		if edge.is_shoreline:
-			continue
+	print("Created %d interactive points and %d interactive paths" % [interactive_points.size(), interactive_paths.size()])
 
-		# Skip if other point is water or mountain
-		if point_types[other_idx] == PointType.WATER or point_types[other_idx] == PointType.MOUNTAIN:
-			continue
-
-		# This is a valid candidate
-		candidate_edges.append({"edge": edge, "other_idx": other_idx, "edge_key": edge_key})
-
-	if candidate_edges.size() == 0:
-		return
-
-	# Pick random candidate for main continuation
-	var chosen = candidate_edges[randi() % candidate_edges.size()]
-	chosen.edge.edge_type = EdgeType.RIVER
-	visited_edges[chosen.edge_key] = true
-
-	# Chance to continue main branch
-	if randf() < river_continuation_chance:
-		_grow_river_branch(chosen.other_idx, current_idx, visited_edges)
-
-	# Chance to create branches from other candidates
-	for candidate in candidate_edges:
-		if candidate.edge_key == chosen.edge_key:
-			continue
-		if randf() < river_branch_chance:
-			candidate.edge.edge_type = EdgeType.RIVER
-			visited_edges[candidate.edge_key] = true
-			_grow_river_branch(candidate.other_idx, current_idx, visited_edges)
 
 func _cache_terrain() -> void:
 	print("Caching terrain...")
@@ -814,9 +795,8 @@ func _draw() -> void:
 	_draw_terrain_cached()
 	if show_voronoi_debug:
 		_draw_voronoi_borders()
-	_draw_terrain_features()  # Draw shorelines, rivers, forests
-	_draw_connections()
-	_draw_points()
+	_draw_terrain_features()  # Draw shorelines, forests
+# Points and connections are now drawn by interactive nodes
 
 func _draw_terrain_cached() -> void:
 	# Draw using pre-calculated cache - much faster!
@@ -834,7 +814,7 @@ func _draw_terrain_cached() -> void:
 			draw_rect(Rect2(world_x, world_y, cache_scale, cache_scale), color)
 
 func _draw_terrain_features() -> void:
-	"""Draw shorelines, rivers, and forests on voronoi edges"""
+	"""Draw shorelines, and forests on voronoi edges"""
 	for edge in voronoi_edges:
 		var segment = edge.segment
 		if segment.size() < 2:
@@ -844,9 +824,6 @@ func _draw_terrain_features() -> void:
 		if edge.is_shoreline:
 			draw_line(segment[0], segment[1], Color(0.9, 0.7, 0.3), 3.0)
 
-		# Draw rivers (blue)
-		if edge.edge_type == EdgeType.RIVER:
-			draw_line(segment[0], segment[1], Color(0.2, 0.4, 0.8), 2.5)
 
 func _draw_voronoi_borders() -> void:
 	# Draw all calculated Voronoi edges with color coding
@@ -907,6 +884,14 @@ func _get_terrain_color(pos: Vector2, type: int, properties: Dictionary) -> Colo
 			return base
 	return Color.WHITE
 
+func set_point_name(point_id: int, new_name: String) -> bool:
+	"""Sets a custom name for a specific point."""
+	if point_id < 0 or point_id >= map_points.size():
+		return false
+
+	point_names[point_id] = new_name
+	return true
+
 func _draw_connections() -> void:
 	for connection in map_connections:
 		var idx1 = connection.idx1
@@ -957,8 +942,8 @@ func _draw_points() -> void:
 				draw_circle(pos, 9, Color(0.8, 0.35, 0.3))
 				draw_circle(pos, 6, Color(0.95, 0.55, 0.45))
 			PointType.VILLAGE:
-				draw_circle(pos, 5, Color(0.4, 0.35, 0.3))
-				draw_circle(pos, 3, Color(0.65, 0.6, 0.55))
+				draw_circle(pos, 5, Color(0.4, 0.35, 0.3, 0.2))
+				draw_circle(pos, 3, Color(0.65, 0.6, 0.55, 0.2))
 			PointType.FOREST:
 				# Draw tree-like icon
 				var pts = PackedVector2Array([
