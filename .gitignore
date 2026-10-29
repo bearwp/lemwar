@@ -10,3 +10,9 @@
 
 # Per-machine export settings (local paths, keystore credentials)
 export_presets.cfg
+
+# Prebuilt native libraries from the nobodywho addon (hundreds of MB)
+addons/nobodywho/*.so
+addons/nobodywho/*.dll
+addons/nobodywho/*.dylib
+addons/nobodywho/*.pdb

@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="TerrainType" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://terrain/terrain_type.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "swamp"
+display_name = "Swamp"
+category = 0
+color = Color(0.4, 0.5, 0.35, 1)
+growth_rate = 0.2
+growth_pattern = 1
+can_grow_into = ["plains", "fields"]
+movement_cost = 2.0
+blend_priority = 4

@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="TerrainType" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://terrain/terrain_type.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "water_deep"
+display_name = "Deep Sea"
+category = 1
+color = Color(0.15, 0.28, 0.45, 1)
+growth_rate = 0.2
+growth_pattern = 2
+growth_direction_preference = Vector2(1, 0)
+can_grow_into = ["water_shallow"]
+movement_cost = 3.0
+blend_priority = 2
+blocks_paths = true
+navigable_by_ship = true

@@ -14,7 +14,7 @@ var is_open: bool = true
 # Slider configuration for DRY principle
 var slider_configs = [
 					 # [label, property, min, max, step]
-						 ["Num Points", "num_points", 50, 300, 1],
+						 ["Num Points", "num_points", 50, 1000, 1],
 						 ["Num Cities", "num_cities", 1, 20, 1],
 						 ["Num Mountains", "num_mountains", 0, 15, 1],
 						 ["Water Sources", "num_water_sources", 1, 20, 1],

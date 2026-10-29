@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="TerrainType" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://terrain/terrain_type.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "desert"
+display_name = "Desert"
+category = 0
+color = Color(0.9, 0.8, 0.5, 1)
+growth_rate = 0.1
+growth_pattern = 1
+can_grow_into = ["plains"]
+movement_cost = 1.3
+blend_priority = 3
