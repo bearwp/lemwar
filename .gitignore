@@ -1,3 +1,12 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Editor/OS noise
+.idea/
+.vscode/
+*.tmp
+.DS_Store
+
+# Per-machine export settings (local paths, keystore credentials)
+export_presets.cfg
